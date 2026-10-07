@@ -1,0 +1,2 @@
+# Backward-compatible entry point. All direct dependencies are exactly pinned.
+-r requirements.txt
