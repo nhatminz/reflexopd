@@ -1,3 +1,25 @@
+# FastGRPO optional-projector startup/resume fix (2026-10-08)
+
+Server traceback identified a missed top-level guard: the EAGLE adapter exposes
+opd_projector as a property even in FastGRPO, where its value is None. hasattr()
+therefore returned True and requires_grad_ failed before LoRA/training setup.
+Changed startup and learned-projector checkpoint compatibility guards to check
+the actual value is not None. No A is created for FastGRPO; OPD gradient flags,
+loss/LR, shared runtime, kernels, sampling and dependencies are unchanged.
+
+Tests execute the ACTUAL startup gradient-setup AST, not only the adapter/rollout:
+FastGRPO None property, optional existing frozen projector, OPD trainable/frozen
+projector and draft-training-off cases. Added real save/load checkpoint roundtrip
+for FastGRPO with None-valued property; existing rank-local OPD resume still passes.
+Targeted suite: **43 passed**; compile and diff checks pass. Server B200 training
+not launched here. Sync updated grpo_speculative.py and rerun a two-step smoke.
+No dependency reinstall, profile retune or pretraining is required by this fix.
+
+Changed files: grpo_speculative.py, tests/test_training_imports.py,
+tests/test_opd_revision.py and this report.
+
+---
+
 # Fair persistent training and shared execution (2026-10-07)
 
 This revision supersedes older "historical timing baseline / OPD-only infrastructure"

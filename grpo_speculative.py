@@ -265,7 +265,7 @@ def load_training_checkpoint(path, *, model, optimizer_target, optimizer_draft):
         }
     if checkpoint.get("method","fastgrpo")!=getattr(model,"_training_method","fastgrpo"):
         raise ValueError("resume method mismatch; start a new run for replacement OPD")
-    if hasattr(model, 'opd_projector') and 'opd_projector' not in checkpoint['draft_model']:
+    if getattr(model, 'opd_projector', None) is not None and 'opd_projector' not in checkpoint['draft_model']:
         raise ValueError(
             'resume checkpoint predates the learned draft projector; start a new '
             'run using its draft weights as initialization, not optimizer resume'
@@ -744,7 +744,7 @@ for param in model.lm_head.parameters():
     param.requires_grad=False
 for param in model.embed_tokens.parameters():
     param.requires_grad=False
-if hasattr(model, 'opd_projector'):
+if getattr(model, 'opd_projector', None) is not None:
     model.opd_projector.requires_grad_(
         method == 'opd_reflex' and _as_bool(args.opd_train_projector) and is_train_draft
     )

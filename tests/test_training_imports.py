@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+import torch
 
 from scripts import check_training_sources
 
@@ -109,6 +110,43 @@ def test_legacy_selection_still_loads_the_original_model(monkeypatch):
 def test_legacy_model_is_not_a_top_level_import():
     imports = [node.module for node in entrypoint_tree().body if isinstance(node, ast.ImportFrom)]
     assert "helper.modeling_draft" not in imports
+
+
+@pytest.mark.parametrize('method,has_projector,train_projector,train_draft,expected',[
+    ('fastgrpo',False,'1',True,None),
+    ('fastgrpo',True,'1',True,False),
+    ('opd_reflex',True,'1',True,True),
+    ('opd_reflex',True,'0',True,False),
+    ('opd_reflex',True,'1',False,False),
+])
+def test_actual_startup_gradient_setup_handles_optional_projector(method,has_projector,train_projector,train_draft,expected):
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.draft_model=torch.nn.Linear(3,4)
+            self.target_model=torch.nn.Linear(3,4)
+            self.lm_head=torch.nn.Linear(4,7)
+            self.embed_tokens=torch.nn.Embedding(7,3)
+            if has_projector:
+                self.draft_model.register_parameter('opd_projector',torch.nn.Parameter(torch.ones(3,2)))
+        @property
+        def opd_projector(self):return getattr(self.draft_model,'opd_projector',None)
+    model=Model()
+    assert hasattr(model,'opd_projector') # Reproduce actual None-valued property.
+    nodes=entrypoint_tree().body
+    start=next(i for i,n in enumerate(nodes) if isinstance(n,ast.For) and
+               ast.unparse(n.iter)=='model.draft_model.parameters()')
+    finish=next(i for i in range(start,len(nodes)) if isinstance(nodes[i],ast.Assign) and
+                any(isinstance(t,ast.Name) and t.id=='lora_config' for t in nodes[i].targets))
+    scope=dict(model=model,method=method,args=SimpleNamespace(opd_train_projector=train_projector),
+               is_train_draft=train_draft,_as_bool=lambda x:str(x)=='1')
+    exec(compile(ast.Module(body=nodes[start:finish],type_ignores=[]),'actual-startup-gradient-setup','exec'),scope)
+    assert model.draft_model.weight.requires_grad
+    assert not any(p.requires_grad for p in model.target_model.parameters())
+    assert not any(p.requires_grad for p in model.lm_head.parameters())
+    assert not any(p.requires_grad for p in model.embed_tokens.parameters())
+    if expected is None:assert model.opd_projector is None
+    else:assert model.opd_projector.requires_grad is expected
 
 
 def minimal_eagle_checkout(tmp_path):

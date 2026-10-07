@@ -215,3 +215,33 @@ def test_training_checkpoint_restores_rank_local_pending_projector_gradient(tmp_
     scope['load_training_checkpoint'](checkpoint,model=model,optimizer_target=target,optimizer_draft=draft)
     assert torch.equal(model.opd_projector_grad_sum,torch.full((8,8),7.))
     assert torch.equal(model.opd_projector_grad_weight,torch.tensor([3.]))
+
+
+def test_fastgrpo_checkpoint_resume_with_none_projector_property(tmp_path):
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__();self.target_model=torch.nn.Linear(3,4);self.draft_model=torch.nn.Linear(3,4)
+            self._training_method='fastgrpo'
+        @property
+        def opd_projector(self):return None
+    from helper.opd_optimizer import load_draft_optimizer
+    scope=dict(torch=torch,Path=Path,dist=SimpleNamespace(is_initialized=lambda:False),
+        capture_rng_state=lambda:None,restore_rng_state=lambda state:None,
+        _atomic_torch_save=lambda state,path:torch.save(state,path),_prune_checkpoints=lambda *args:None,
+        get_peft_model_state_dict=None,set_peft_model_state_dict=None,load_draft_optimizer=load_draft_optimizer)
+    names={'_target_lora_state_dict','_load_target_lora_state_dict','_gradient_state',
+           '_restore_gradient_state','save_training_checkpoint','load_training_checkpoint'}
+    nodes=[n for n in ast.parse((Path(__file__).parents[1]/'grpo_speculative.py').read_text()).body
+           if isinstance(n,ast.FunctionDef) and n.name in names]
+    exec(compile(ast.Module(body=nodes,type_ignores=[]),'actual-checkpoint-functions','exec'),scope)
+    model=Model();target=torch.optim.AdamW(model.target_model.parameters(),lr=1e-6)
+    draft=torch.optim.AdamW(model.draft_model.parameters(),lr=1e-4)
+    expected={name:p.detach().clone() for name,p in model.named_parameters()}
+    checkpoint=scope['save_training_checkpoint'](tmp_path,model=model,optimizer_target=target,
+        optimizer_draft=draft,epoch=0,next_batch=1,step=1,used_items=8,draft_step=1,
+        draft_accumulated_step=1,batch_data={},keep_last=1,cumulative_elapsed_time_s=1.)
+    with torch.no_grad():
+        for p in model.parameters():p.add_(10)
+    restored=scope['load_training_checkpoint'](checkpoint,model=model,optimizer_target=target,optimizer_draft=draft)
+    assert restored['method']=='fastgrpo' and model.opd_projector is None
+    for name,p in model.named_parameters():assert torch.equal(p,expected[name])
